@@ -1,0 +1,580 @@
+{
+  "info": {
+    "name": "DGI Télépaiement - API Banque (STT)",
+    "description": "Collection de test pour l'API de Télépaiement DGI/STT (ajout de compte bancaire + exécution des ordres de paiement). Basée sur l'application DRF fournie qui simule le rôle de STT.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "client_id", "value": "Tresor" },
+    { "key": "client_secret", "value": "secret" },
+    { "key": "token", "value": "" },
+    { "key": "account_transaction_id", "value": "" },
+    { "key": "payment_transaction_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Authentification (OAuth2)",
+      "item": [
+        {
+          "name": "1.1 Obtenir un token (succès)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "grant_type", "value": "client_credentials" },
+                { "key": "client_id", "value": "{{client_id}}" },
+                { "key": "client_secret", "value": "{{client_secret}}" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/oauth/token", "host": ["{{base_url}}"], "path": ["oauth", "token"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('accessToken présent', () => pm.expect(json.accessToken).to.be.a('string'));",
+              "pm.collectionVariables.set('token', json.accessToken);"
+            ]}
+          }]
+        },
+        {
+          "name": "1.2 Token - client_secret invalide (401)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "grant_type", "value": "client_credentials" },
+                { "key": "client_id", "value": "{{client_id}}" },
+                { "key": "client_secret", "value": "mauvais_secret" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/oauth/token", "host": ["{{base_url}}"], "path": ["oauth", "token"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 401 invalid_client', () => pm.response.to.have.status(401));"
+            ]}
+          }]
+        },
+        {
+          "name": "1.3 Token - grant_type manquant (400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "client_id", "value": "{{client_id}}" },
+                { "key": "client_secret", "value": "{{client_secret}}" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/oauth/token", "host": ["{{base_url}}"], "path": ["oauth", "token"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 400 unsupported_grant_type', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "2. Ajout du compte bancaire",
+      "item": [
+        {
+          "name": "2.1 [TEST] Créer une notification ACCOUNT",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tax_payer_iban\": \"MR13000010010001234567890134\",\n  \"tax_payer_legal_name\": \"ADIAS SA\",\n  \"nif\": \"01234567\",\n  \"tax_payer_phone_number\": \"22171190\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/test/accounts/", "host": ["{{base_url}}"], "path": ["api", "test", "accounts", ""] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 201', () => pm.response.to.have.status(201));",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('account_transaction_id', json.transactionId);"
+            ]}
+          }]
+        },
+        {
+          "name": "2.2 GET détails du compte (succès)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{base_url}}/notification/ACCOUNT/{{account_transaction_id}}",
+              "host": ["{{base_url}}"], "path": ["notification", "ACCOUNT", "{{account_transaction_id}}"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('operationType = ACCOUNT', () => pm.expect(json.operationType).to.eql('ACCOUNT'));",
+              "pm.test('taxPayerIban présent', () => pm.expect(json.taxPayerIban).to.be.a('string'));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.3 GET détails - transactionId inexistant (404)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{base_url}}/notification/ACCOUNT/00000000-0000-0000-0000-000000000000",
+              "host": ["{{base_url}}"], "path": ["notification", "ACCOUNT", "00000000-0000-0000-0000-000000000000"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 404', () => pm.response.to.have.status(404));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.4 GET détails - sans token (401/403)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/notification/ACCOUNT/{{account_transaction_id}}",
+              "host": ["{{base_url}}"], "path": ["notification", "ACCOUNT", "{{account_transaction_id}}"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Non authentifié -> 401 ou 403', () => pm.expect([401,403]).to.include(pm.response.code));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.5 POST /update - REJECTED sans rejectionReasonCode (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{account_transaction_id}}\",\n  \"notificationType\": \"ACCOUNT\",\n  \"status\": \"REJECTED\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 400 missing_field', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.6 POST /update - AUTHORIZED (succès, décision banque)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{account_transaction_id}}\",\n  \"notificationType\": \"ACCOUNT\",\n  \"status\": \"AUTHORIZED\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('notificationType = OperationUpdate', () => pm.expect(json.notificationType).to.eql('OperationUpdate'));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.7 POST /update - déjà traité (409 conflit)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{account_transaction_id}}\",\n  \"notificationType\": \"ACCOUNT\",\n  \"status\": \"AUTHORIZED\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 409 invalid_state', () => pm.response.to.have.status(409));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.8 [TEST] Créer + rejeter un compte (REJECTED avec code 001)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tax_payer_iban\": \"MR99000000000000000000000000\",\n  \"tax_payer_legal_name\": \"Client Inexistant\",\n  \"nif\": \"99999999\",\n  \"tax_payer_phone_number\": \"22190000\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/test/accounts/", "host": ["{{base_url}}"], "path": ["api", "test", "accounts", ""] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('account_transaction_id_reject', json.transactionId);",
+              "pm.test('Status 201', () => pm.response.to.have.status(201));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.9 POST /update - REJECTED avec code 001 (succès)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{account_transaction_id_reject}}\",\n  \"notificationType\": \"ACCOUNT\",\n  \"status\": \"REJECTED\",\n  \"rejectionReasonCode\": \"001\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "2.10 POST /update - code de rejet inconnu (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{account_transaction_id_reject}}\",\n  \"notificationType\": \"ACCOUNT\",\n  \"status\": \"REJECTED\",\n  \"rejectionReasonCode\": \"777\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 400 (déjà traité OU code inconnu selon ordre)', () => pm.expect([400,409]).to.include(pm.response.code));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "3. Exécution des ordres de paiement",
+      "item": [
+        {
+          "name": "3.1 [TEST] Créer une notification PAYMENT",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tax_payer_iban\": \"MR1300099000171023456211256\",\n  \"tax_payer_legal_name\": \"Adias SA\",\n  \"nif\": \"56402324\",\n  \"ntd\": \"123456789\",\n  \"tax_payer_phone_number\": \"22171190\",\n  \"amount\": 30000.00\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/test/payments/", "host": ["{{base_url}}"], "path": ["api", "test", "payments", ""] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 201', () => pm.response.to.have.status(201));",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('payment_transaction_id', json.transactionId);"
+            ]}
+          }]
+        },
+        {
+          "name": "3.2 GET détails du paiement (succès)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{base_url}}/notification/PAYMENT/{{payment_transaction_id}}",
+              "host": ["{{base_url}}"], "path": ["notification", "PAYMENT", "{{payment_transaction_id}}"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('operationType = PAYMENT', () => pm.expect(json.operationType).to.eql('PAYMENT'));",
+              "pm.test('amount présent', () => pm.expect(json.amount).to.exist);"
+            ]}
+          }]
+        },
+        {
+          "name": "3.3 POST /update - Validation avant Initiation (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"EXECUTED\",\n  \"transactionIdBank\": \"67H8743DY888\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 409 (doit être IN_PROGRESS avant EXECUTED)', () => pm.response.to.have.status(409));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.4 POST /update - Initiation IN_PROGRESS (succès)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"IN_PROGRESS\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.5 POST /update - Initiation en double (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"IN_PROGRESS\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 409 (déjà IN_PROGRESS)', () => pm.response.to.have.status(409));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.6 POST /update - Validation EXECUTED sans transactionIdBank (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"EXECUTED\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 400 missing_field', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.7 POST /update - Validation EXECUTED (succès)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"EXECUTED\",\n  \"transactionIdBank\": \"67H8743DY888\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.8 [TEST] Créer + rejeter un paiement (Provision insuffisante 005)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tax_payer_iban\": \"MR1300099000171023456211256\",\n  \"tax_payer_legal_name\": \"Client Sans Fonds\",\n  \"nif\": \"11223344\",\n  \"ntd\": \"987654321\",\n  \"tax_payer_phone_number\": \"22100000\",\n  \"amount\": 500000.00\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/test/payments/", "host": ["{{base_url}}"], "path": ["api", "test", "payments", ""] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('payment_transaction_id_reject', json.transactionId);",
+              "pm.test('Status 201', () => pm.response.to.have.status(201));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.9 POST /update - Initiation IN_PROGRESS (pour rejet)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id_reject}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"IN_PROGRESS\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.10 POST /update - Validation REJECTED avec code 005",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{payment_transaction_id_reject}}\",\n  \"notificationType\": \"PAYMENT\",\n  \"status\": \"REJECTED\",\n  \"rejectionReasonCode\": \"005\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "3.11 GET détails paiement - transactionId inexistant (404)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{base_url}}/notification/PAYMENT/00000000-0000-0000-0000-000000000000",
+              "host": ["{{base_url}}"], "path": ["notification", "PAYMENT", "00000000-0000-0000-0000-000000000000"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 404', () => pm.response.to.have.status(404));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "4. Divers",
+      "item": [
+        {
+          "name": "4.1 Liste des motifs de rejet (Annexe 2)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/test/rejection-codes/", "host": ["{{base_url}}"], "path": ["api", "test", "rejection-codes", ""] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "4.2 Token expiré / invalide (401)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer token_invalide_ou_expire_xyz" }],
+            "url": {
+              "raw": "{{base_url}}/notification/ACCOUNT/{{account_transaction_id}}",
+              "host": ["{{base_url}}"], "path": ["notification", "ACCOUNT", "{{account_transaction_id}}"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 401 token invalide', () => pm.response.to.have.status(401));"
+            ]}
+          }]
+        },
+        {
+          "name": "4.3 /update - notificationType invalide (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"{{account_transaction_id}}\",\n  \"notificationType\": \"AUTRE\",\n  \"status\": \"AUTHORIZED\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/update", "host": ["{{base_url}}"], "path": ["update"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 400 (validation serializer)', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        }
+      ]
+    }
+  ]
+}
