@@ -1,8 +1,9 @@
 from rest_framework import status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from django.contrib.auth import authenticate
 from .authentication import BearerTokenAuthentication
+import requests
 from .models import (
     AccessToken, AccountTransaction, OAuthClient, PaymentTransaction, REJECTION_REASONS,
 )
@@ -11,20 +12,64 @@ from .serializers import (
     PaymentCreateSerializer, PaymentDetailSerializer,
     UpdateRequestSerializer,
 )
-
+from django.conf import settings
 
 # ---------------------------------------------------------------------------
 # II. Autorisations d'accès à l'API — POST /oauth/token
 # ---------------------------------------------------------------------------
+import base64
+import binascii
+
+import base64
+import binascii
+
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+# Adaptez ces imports à votre projet
+# from .models import OAuthClient, AccessToken
+
+
 class TokenView(APIView):
+    """
+    POST /oauth/token — grant_type=client_credentials (RFC 6749 §4.4).
+
+    Le client peut s'authentifier de deux façons :
+      - client_secret_basic : en-tête `Authorization: Basic base64(client_id:client_secret)`
+        (dans ce cas aucun body n'est nécessaire, grant_type vaut
+        "client_credentials" par défaut puisque c'est le seul grant type
+        supporté par cette API)
+      - client_secret_post  : `client_id` / `client_secret` (+ `grant_type`)
+        dans le corps de la requête
+    """
+
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
+    def _client_credentials_from_basic_header(self, request):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Basic "):
+            return None, None
+        try:
+            decoded = base64.b64decode(auth_header[len("Basic "):]).decode("utf-8")
+            client_id, client_secret = decoded.split(":", 1)
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            return None, None
+        return client_id, client_secret
+
     def post(self, request):
         data = request.data
-        grant_type = data.get("grant_type")
-        client_id = data.get("client_id")
-        client_secret = data.get("client_secret")
+
+        client_id, client_secret = self._client_credentials_from_basic_header(request)
+        if client_id is None:
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            grant_type = data.get("grant_type")
+        else:
+            # Client authentifié via Basic Auth : le body est facultatif,
+            # "client_credentials" est le seul grant type supporté ici.
+            grant_type = data.get("grant_type") or "client_credentials"
 
         if grant_type != "client_credentials":
             return Response(
@@ -40,13 +85,80 @@ class TokenView(APIView):
         try:
             client = OAuthClient.objects.get(client_id=client_id, client_secret=client_secret)
         except OAuthClient.DoesNotExist:
-            return Response(
+            response = Response(
                 {"error": "invalid_client", "error_description": "client_id / client_secret invalide."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+            response["WWW-Authenticate"] = "Basic"
+            return response
 
         token = AccessToken.objects.create(client=client)
         return Response({"accessToken": token.token}, status=status.HTTP_200_OK)
+
+
+
+
+# ---------------------------------------------------------------------------
+# Client OAuth2 côté banque — POST /stt/token
+# 1) Vérifie que le client (username/password) existe dans notre base locale.
+# 2) Si oui, récupère un access token auprès du vrai serveur STT/DGI (Keycloak)
+#    avec le couple client_id/client_secret attribué à cette banque (settings.STT_*)
+#    et renvoie tel quel le JSON retourné par Keycloak.
+# 3) Si le client n'existe pas / mauvais mot de passe, renvoie une erreur typée.
+# ---------------------------------------------------------------------------
+class STTTokenView(APIView):
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        username = request.data.get("username")
+        password = request.data.get("password")
+
+        if not username or not password:
+            return Response(
+                {"error": "invalid_request", "error_description": "username et password sont requis."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = authenticate(request, username=username, password=password)
+        if user is None:
+            return Response(
+                {"error": "invalid_client", "error_description": "Client inconnu ou identifiants invalides."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not settings.STT_CLIENT_ID or not settings.STT_CLIENT_SECRET:
+            return Response(
+                {
+                    "error": "server_error",
+                    "error_description": "STT_CLIENT_ID / STT_CLIENT_SECRET non configurés côté serveur.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            upstream = requests.post(
+                settings.STT_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": settings.STT_CLIENT_ID,
+                    "client_secret": settings.STT_CLIENT_SECRET,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            return Response(
+                {"error": "upstream_unreachable", "error_description": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        try:
+            payload = upstream.json()
+        except ValueError:
+            payload = {"error": "upstream_invalid_response", "error_description": upstream.text}
+
+        return Response(payload, status=upstream.status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -54,11 +166,31 @@ class TokenView(APIView):
 # ajoute un compte, ou confirme un ordre de paiement sur STT. C'est ce qui,
 # dans le vrai système, déclenche la notification POST vers la banque.
 # ---------------------------------------------------------------------------
+
 class CreateAccountTestView(APIView):
-    """POST /api/test/accounts/ — crée une transaction ACCOUNT (status=PENDING)."""
+    """POST /api/test/accounts/ — crée une transaction ACCOUNT (status=PENDING).
+
+    Body attendu:
+    {
+        "transactionId": "3a957d71-81e2-49bf-ae7a-3d3119af37e6",
+        "notificationType": "ACCOUNT"
+    }
+    """
 
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        """GET /api/test/accounts/ — liste transactionId + type + status de chaque compte créé."""
+        data = [
+            {
+                "transactionId": str(obj.transaction_id),
+                "operationType": "ACCOUNT",
+                "status": obj.status,
+            }
+            for obj in AccountTransaction.objects.all().order_by("-operation_date")
+        ]
+        return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request):
         serializer = AccountCreateSerializer(data=request.data)
@@ -74,12 +206,23 @@ class CreateAccountTestView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
-
 class CreatePaymentTestView(APIView):
     """POST /api/test/payments/ — crée une transaction PAYMENT (status=PENDING)."""
 
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        """GET /api/test/payments/ — liste transactionId + type + status de chaque paiement créé."""
+        data = [
+            {
+                "transactionId": str(obj.transaction_id),
+                "operationType": "PAYMENT",
+                "status": obj.status,
+            }
+            for obj in PaymentTransaction.objects.all().order_by("-operation_date")
+        ]
+        return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request):
         serializer = PaymentCreateSerializer(data=request.data)
@@ -95,7 +238,6 @@ class CreatePaymentTestView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
-
 class RejectionReasonsView(APIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
@@ -110,6 +252,8 @@ class RejectionReasonsView(APIView):
 class AccountNotificationDetailView(APIView):
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    #authentication_classes = []
+    #permission_classes = [permissions.AllowAny]
 
     def get(self, request, transaction_id):
         try:
@@ -121,10 +265,12 @@ class AccountNotificationDetailView(APIView):
             )
         return Response(AccountDetailSerializer(obj).data, status=status.HTTP_200_OK)
 
-
 class PaymentNotificationDetailView(APIView):
+
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    #authentication_classes = []
+    #permission_classes = [permissions.AllowAny]
 
     def get(self, request, transaction_id):
         try:
@@ -141,8 +287,11 @@ class PaymentNotificationDetailView(APIView):
 # III.3 / IV.3 / IV.4 — POST /update
 # ---------------------------------------------------------------------------
 class UpdateView(APIView):
+
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    #authentication_classes = []
+    #permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = UpdateRequestSerializer(data=request.data)
@@ -284,3 +433,159 @@ class UpdateView(APIView):
             {"transactionId": str(obj.transaction_id), "notificationType": "OperationUpdate"},
             status=status.HTTP_200_OK,
         )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import os
+import requests
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+
+# Pas de dépendance à settings.py — lu directement depuis l'environnement
+# (déjà chargé via load_dotenv dans settings.py), avec fallback en dur.
+STT_API_BASE_URL = os.environ.get('STT_API_BASE_URL', 'https://api.stt-pp.e-tax.impots.gov.mr')
+
+
+def _forward_headers(request):
+    """Récupère le header Authorization du frontend pour le relayer au STT."""
+    auth = request.headers.get('Authorization')
+    headers = {}
+    if auth:
+        headers['Authorization'] = auth
+    return headers
+
+
+@api_view(['GET'])
+def get_notification(request, notif_type, transaction_id):
+    """
+    Proxy vers GET {STT_API_BASE_URL}/notification/{ACCOUNT|PAYMENT}/{transactionId}
+    """
+    if notif_type not in ('ACCOUNT', 'PAYMENT'):
+        return Response({'error': 'Type invalide'}, status=status.HTTP_400_BAD_REQUEST)
+
+    url = f"{STT_API_BASE_URL}/notification/{notif_type}/{transaction_id}"
+
+    try:
+        resp = requests.get(url, headers=_forward_headers(request), timeout=15)
+    except requests.RequestException as exc:
+        return Response(
+            {'error': 'Impossible de contacter le STT', 'detail': str(exc)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {'raw': resp.text}
+
+    return Response(data, status=resp.status_code)
+
+
+#@api_view(['POST'])
+#def update_operation(request):
+    """
+    Proxy vers POST {STT_API_BASE_URL}/update
+    Body attendu: { transactionId, notificationType, status, rejectionReasonCode? }
+    """
+#    url = f"{STT_API_BASE_URL}/update"
+#    headers = _forward_headers(request)
+#    headers['Content-Type'] = 'application/json'
+
+#    try:
+#        resp = requests.post(url, json=request.data, headers=headers, timeout=15)
+#    except requests.RequestException as exc:
+#        return Response(
+#            {'error': 'Impossible de contacter le STT', 'detail': str(exc)},
+#            status=status.HTTP_502_BAD_GATEWAY,
+#        )
+
+#    try:
+#        data = resp.json()
+#    except ValueError:
+#        data = {'raw': resp.text}
+
+#    return Response(data, status=resp.status_code)
+
+
+def _sync_local_status(request_body, stt_status_code):
+    """Répercute localement la décision une fois que le vrai STT a répondu 2xx :
+    la transaction ACCOUNT/PAYMENT correspondante passe au même status que celui
+    envoyé dans la requête (AUTHORIZED/REJECTED, IN_PROGRESS/EXECUTED/REJECTED).
+    Si la transaction n'existe pas en local, on ignore silencieusement (elle a
+    pu être créée directement côté STT sans passer par nos endpoints de test)."""
+    if not (200 <= stt_status_code < 300):
+        return
+
+    transaction_id = request_body.get('transactionId')
+    notification_type = request_body.get('notificationType')
+    new_status = request_body.get('status')
+    if not transaction_id or not notification_type or not new_status:
+        return
+
+    if notification_type == 'ACCOUNT':
+        obj = AccountTransaction.objects.filter(transaction_id=transaction_id).first()
+        if not obj:
+            return
+        obj.status = new_status
+        obj.rejection_reason_code = request_body.get('rejectionReasonCode', obj.rejection_reason_code)
+        obj.save()
+    elif notification_type == 'PAYMENT':
+        obj = PaymentTransaction.objects.filter(transaction_id=transaction_id).first()
+        if not obj:
+            return
+        obj.status = new_status
+        obj.rejection_reason_code = request_body.get('rejectionReasonCode', obj.rejection_reason_code)
+        obj.transaction_id_bank = request_body.get('transactionIdBank', obj.transaction_id_bank)
+        obj.save()
+
+
+@api_view(['POST'])
+def update_operation(request):
+    """
+    Proxy vers POST {STT_API_BASE_URL}/update
+    Body attendu: { transactionId, notificationType, status, rejectionReasonCode? }
+
+    Si le vrai STT répond 2xx, la transaction locale correspondante (créée via
+    /api/test/accounts/ ou /api/test/payments/) est mise à jour avec le même
+    status, pour que la liste locale reflète la décision prise.
+    """
+    url = f"{STT_API_BASE_URL}/update"
+    headers = _forward_headers(request)
+    headers['Content-Type'] = 'application/json'
+
+    try:
+        resp = requests.post(url, json=request.data, headers=headers, timeout=15)
+    except requests.RequestException as exc:
+        return Response(
+            {'error': 'Impossible de contacter le STT', 'detail': str(exc)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {'raw': resp.text}
+
+    _sync_local_status(request.data, resp.status_code)
+
+    return Response(data, status=resp.status_code)
+
+
+
+
