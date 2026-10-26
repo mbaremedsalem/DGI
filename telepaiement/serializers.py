@@ -57,14 +57,7 @@ class AccountCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AccountTransaction
-        fields = [
-            "transactionId",
-            "notificationType",
-            "tax_payer_iban",
-            "tax_payer_legal_name",
-            "nif",
-            "tax_payer_phone_number",
-        ]
+        fields = ["tax_payer_iban", "tax_payer_legal_name", "nif", "tax_payer_phone_number"]
 
     def validate_notificationType(self, value):
         if value != "ACCOUNT":
@@ -81,7 +74,6 @@ class AccountCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop("notificationType", None)
         return AccountTransaction.objects.create(**validated_data)
-
 
 class AccountDetailSerializer(serializers.ModelSerializer):
     transactionId = serializers.CharField(source="transaction_id")

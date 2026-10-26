@@ -16,3 +16,4 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Client OAuth prêt -> client_id='{client.client_id}' client_secret='{client.client_secret}'"
         ))
+

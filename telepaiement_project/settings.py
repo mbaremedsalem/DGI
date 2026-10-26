@@ -18,8 +18,6 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / '.env')
-
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
@@ -30,8 +28,7 @@ SECRET_KEY = 'django-insecure-fcty36$#vhwf0+_i@4@qgfb!1xs*rn^92d)g#$+9ow*1m*x5kz
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['192.168.11.15', 'localhost', '127.0.0.1']
-
+ALLOWED_HOSTS = []
 
 # ---------------------------------------------------------------------------
 # Client OAuth2 utilisé par CE serveur pour s'authentifier auprès du vrai
@@ -43,8 +40,6 @@ STT_TOKEN_URL = os.environ.get(
 )
 STT_CLIENT_ID = os.environ.get('STT_CLIENT_ID', '')
 STT_CLIENT_SECRET = os.environ.get('STT_CLIENT_SECRET', '')
-STT_API_BASE_URL = os.environ.get('STT_API_BASE_URL', 'https://api.stt-pp.e-tax.impots.gov.mr')
-
 
 # Application definition
 
@@ -88,6 +83,10 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'telepaiement_project.urls'
+
+CSRF_TRUSTED_ORIGINS = [
+    'http://192.168.11.15:7050',
+]
 
 TEMPLATES = [
     {
@@ -152,8 +151,18 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+#STATIC_URL = 'static/'
 
+STATIC_URL = 'static/'
+STATIC_ROOT = '/appli/DGI/staticfiles/'  # Important !
+
+# Si vous avez des dossiers statiques supplémentaires
+STATICFILES_DIRS = [
+    # '/appli/DGI/static',  # Si vous avez ce dossier
+]
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = '/appli/DGI/media/'
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration

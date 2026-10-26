@@ -23,12 +23,38 @@ from .serializers import (
     ChangePasswordSerializer, PaymentCreateSerializer, PaymentDetailSerializer,
     UpdateRequestSerializer, UserProfileSerializer,
 )
-
+from django.conf import settings
 
 # ---------------------------------------------------------------------------
 # II. Autorisations d'accès à l'API — POST /oauth/token
 # ---------------------------------------------------------------------------
+import base64
+import binascii
+
+import base64
+import binascii
+
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+# Adaptez ces imports à votre projet
+# from .models import OAuthClient, AccessToken
+
+
 class TokenView(APIView):
+    """
+    POST /oauth/token — grant_type=client_credentials (RFC 6749 §4.4).
+
+    Le client peut s'authentifier de deux façons :
+      - client_secret_basic : en-tête `Authorization: Basic base64(client_id:client_secret)`
+        (dans ce cas aucun body n'est nécessaire, grant_type vaut
+        "client_credentials" par défaut puisque c'est le seul grant type
+        supporté par cette API)
+      - client_secret_post  : `client_id` / `client_secret` (+ `grant_type`)
+        dans le corps de la requête
+    """
+
     """
     POST /oauth/token — grant_type=client_credentials (RFC 6749 §4.4).
 
@@ -55,8 +81,29 @@ class TokenView(APIView):
             return None, None
         return client_id, client_secret
 
+    def _client_credentials_from_basic_header(self, request):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Basic "):
+            return None, None
+        try:
+            decoded = base64.b64decode(auth_header[len("Basic "):]).decode("utf-8")
+            client_id, client_secret = decoded.split(":", 1)
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            return None, None
+        return client_id, client_secret
+
     def post(self, request):
         data = request.data
+
+        client_id, client_secret = self._client_credentials_from_basic_header(request)
+        if client_id is None:
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            grant_type = data.get("grant_type")
+        else:
+            # Client authentifié via Basic Auth : le body est facultatif,
+            # "client_credentials" est le seul grant type supporté ici.
+            grant_type = data.get("grant_type") or "client_credentials"
 
         client_id, client_secret = self._client_credentials_from_basic_header(request)
         if client_id is None:
@@ -86,6 +133,8 @@ class TokenView(APIView):
                 {"error": "invalid_client", "error_description": "client_id / client_secret invalide."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+            response["WWW-Authenticate"] = "Basic"
+            return response
             response["WWW-Authenticate"] = "Basic"
             return response
 
@@ -367,7 +416,14 @@ def extract_account_number_from_iban(iban: str) -> str | None:
 
 
 class CreateAccountTestView(APIView):
-    """POST /api/test/accounts/ — crée une transaction ACCOUNT (status=PENDING)."""
+    """POST /api/test/accounts/ — crée une transaction ACCOUNT (status=PENDING).
+
+    Body attendu:
+    {
+        "transactionId": "3a957d71-81e2-49bf-ae7a-3d3119af37e6",
+        "notificationType": "ACCOUNT"
+    }
+    """
 
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
@@ -403,7 +459,6 @@ class CreateAccountTestView(APIView):
             },
             status=status.HTTP_201_CREATED,
         ) 
-
 
 class CreatePaymentTestView(APIView):
     """POST /api/test/payments/ — crée une transaction PAYMENT (status=PENDING)."""
@@ -631,6 +686,8 @@ class RejectionReasonsView(APIView):
 class AccountNotificationDetailView(APIView):
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    #authentication_classes = []
+    #permission_classes = [permissions.AllowAny]
 
     def get(self, request, transaction_id):
         try:
@@ -642,10 +699,12 @@ class AccountNotificationDetailView(APIView):
             )
         return Response(AccountDetailSerializer(obj).data, status=status.HTTP_200_OK)
 
-
 class PaymentNotificationDetailView(APIView):
+
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    #authentication_classes = []
+    #permission_classes = [permissions.AllowAny]
 
     def get(self, request, transaction_id):
         try:
@@ -662,8 +721,11 @@ class PaymentNotificationDetailView(APIView):
 # III.3 / IV.3 / IV.4 — POST /update
 # ---------------------------------------------------------------------------
 class UpdateView(APIView):
+
     authentication_classes = [BearerTokenAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    #authentication_classes = []
+    #permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = UpdateRequestSerializer(data=request.data)

@@ -107,6 +107,12 @@ REJECTION_REASONS = {
 # ---------------------------------------------------------------------------
 # III. Ajout du compte bancaire
 # ---------------------------------------------------------------------------
+import uuid
+
+from django.db import models
+from django.utils import timezone
+
+
 class AccountTransaction(models.Model):
     STATUS_PENDING = "PENDING"
     STATUS_AUTHORIZED = "AUTHORIZED"
@@ -117,15 +123,11 @@ class AccountTransaction(models.Model):
         (STATUS_REJECTED, "Rejeté"),
     ]
 
-    # editable=True (et plus de default) : le client DOIT fournir transactionId.
-    # Si vous voulez un fallback auto-généré quand le client ne le fournit pas,
-    # gardez default=uuid.uuid4 et laissez juste editable=True.
-    transaction_id = models.CharField(max_length=64, primary_key=True, editable=True)
-
-    tax_payer_iban = models.CharField(max_length=34, blank=True, default="")
-    tax_payer_legal_name = models.CharField(max_length=150, blank=True, default="")
-    nif = models.CharField(max_length=20, blank=True, default="")
-    tax_payer_phone_number = models.CharField(max_length=20, blank=True, default="")
+    transaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tax_payer_iban = models.CharField(max_length=34)
+    tax_payer_legal_name = models.CharField(max_length=150)
+    nif = models.CharField(max_length=20)
+    tax_payer_phone_number = models.CharField(max_length=20)
     operation_date = models.DateTimeField(default=timezone.now)
 
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_PENDING)
@@ -133,8 +135,6 @@ class AccountTransaction(models.Model):
 
     def __str__(self):
         return f"ACCOUNT {self.transaction_id} [{self.status}]"
-
-
 
 
 # ---------------------------------------------------------------------------
