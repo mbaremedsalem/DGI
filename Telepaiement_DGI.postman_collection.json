@@ -10,7 +10,10 @@
     { "key": "client_secret", "value": "secret" },
     { "key": "token", "value": "" },
     { "key": "account_transaction_id", "value": "" },
-    { "key": "payment_transaction_id", "value": "" }
+    { "key": "payment_transaction_id", "value": "" },
+    { "key": "stt_username", "value": "10016" },
+    { "key": "stt_password", "value": "pass1234" },
+    { "key": "stt_token", "value": "" }
   ],
   "item": [
     {
@@ -36,8 +39,10 @@
             "script": { "exec": [
               "pm.test('Status 200', () => pm.response.to.have.status(200));",
               "const json = pm.response.json();",
-              "pm.test('accessToken présent', () => pm.expect(json.accessToken).to.be.a('string'));",
-              "pm.collectionVariables.set('token', json.accessToken);"
+              "pm.test('access_token présent', () => pm.expect(json.access_token).to.be.a('string'));",
+              "pm.test('token_type Bearer', () => pm.expect(json.token_type).to.eql('Bearer'));",
+              "pm.test('expires_in présent', () => pm.expect(json.expires_in).to.be.a('number'));",
+              "pm.collectionVariables.set('token', json.access_token);"
             ]}
           }]
         },
@@ -60,6 +65,35 @@
             "listen": "test",
             "script": { "exec": [
               "pm.test('Status 401 invalid_client', () => pm.response.to.have.status(401));"
+            ]}
+          }]
+        },
+        {
+          "name": "1.1b Obtenir un token (Basic Auth)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }],
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "{{client_id}}" },
+                { "key": "password", "value": "{{client_secret}}" }
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "grant_type", "value": "client_credentials" }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/oauth/token", "host": ["{{base_url}}"], "path": ["oauth", "token"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('access_token présent', () => pm.expect(json.access_token).to.be.a('string'));"
             ]}
           }]
         },
@@ -571,6 +605,127 @@
             "listen": "test",
             "script": { "exec": [
               "pm.test('Status 400 (validation serializer)', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        }
+      ]
+    },
+    {
+      "name": "5. Traitement / Archivage des paiements",
+      "item": [
+        {
+          "name": "5.1 [STT] Obtenir un token STT (stt/token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{stt_username}}\",\n  \"password\": \"{{stt_password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/stt/token", "host": ["{{base_url}}"], "path": ["stt", "token"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('access_token présent', () => pm.expect(json.access_token).to.be.a('string'));",
+              "pm.collectionVariables.set('stt_token', json.access_token);"
+            ]}
+          }]
+        },
+        {
+          "name": "5.2 POST traiter/archiver un paiement EXECUTED (succès)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{stt_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/api/payments/{{payment_transaction_id}}/process/",
+              "host": ["{{base_url}}"], "path": ["api", "payments", "{{payment_transaction_id}}", "process", ""]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "5.3 POST traiter - déjà archivé (409)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{stt_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/api/payments/{{payment_transaction_id}}/process/",
+              "host": ["{{base_url}}"], "path": ["api", "payments", "{{payment_transaction_id}}", "process", ""]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 409 (déjà archivé)', () => pm.response.to.have.status(409));"
+            ]}
+          }]
+        },
+        {
+          "name": "5.4 POST traiter - sans token STT (400)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/payments/{{payment_transaction_id}}/process/",
+              "host": ["{{base_url}}"], "path": ["api", "payments", "{{payment_transaction_id}}", "process", ""]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 400 (token STT requis)', () => pm.response.to.have.status(400));"
+            ]}
+          }]
+        },
+        {
+          "name": "5.5 GET liste des paiements archivés",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/payments/archive/", "host": ["{{base_url}}"], "path": ["api", "payments", "archive", ""] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "5.6 GET détail d'un paiement archivé",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/payments/archive/{{payment_transaction_id}}/",
+              "host": ["{{base_url}}"], "path": ["api", "payments", "archive", "{{payment_transaction_id}}", ""]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));"
+            ]}
+          }]
+        },
+        {
+          "name": "5.7 GET détail archive - transactionId inexistant (404)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/payments/archive/00000000-0000-0000-0000-000000000000/",
+              "host": ["{{base_url}}"], "path": ["api", "payments", "archive", "00000000-0000-0000-0000-000000000000", ""]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "exec": [
+              "pm.test('Status 404', () => pm.response.to.have.status(404));"
             ]}
           }]
         }

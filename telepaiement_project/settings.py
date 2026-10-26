@@ -10,10 +10,15 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -25,7 +30,20 @@ SECRET_KEY = 'django-insecure-fcty36$#vhwf0+_i@4@qgfb!1xs*rn^92d)g#$+9ow*1m*x5kz
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['192.168.11.15', 'localhost', '127.0.0.1']
+
+
+# ---------------------------------------------------------------------------
+# Client OAuth2 utilisé par CE serveur pour s'authentifier auprès du vrai
+# STT/DGI (Keycloak) — voir telepaiement.views.STTTokenView.
+# ---------------------------------------------------------------------------
+STT_TOKEN_URL = os.environ.get(
+    'STT_TOKEN_URL',
+    'https://keycloak.stt-pp.e-tax.impots.gov.mr/auth/realms/stt/protocol/openid-connect/token',
+)
+STT_CLIENT_ID = os.environ.get('STT_CLIENT_ID', '')
+STT_CLIENT_SECRET = os.environ.get('STT_CLIENT_SECRET', '')
+STT_API_BASE_URL = os.environ.get('STT_API_BASE_URL', 'https://api.stt-pp.e-tax.impots.gov.mr')
 
 
 # Application definition
@@ -37,8 +55,21 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders',
     'rest_framework',
+    'rest_framework.authtoken',
     'telepaiement',
+]
+
+# CORS : autorise le front (React, sur une autre origine/port) à appeler cette
+# API depuis un navigateur. Outil interne (réseau privé) -> on autorise toutes
+# les origines par défaut ; restreignez via CORS_ALLOWED_ORIGINS si besoin.
+CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'true').lower() == 'true'
+
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+    if origin.strip()
 ]
 
 REST_FRAMEWORK = {
@@ -47,6 +78,7 @@ REST_FRAMEWORK = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',

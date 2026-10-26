@@ -23,7 +23,7 @@ Le serveur écoute par défaut sur `http://127.0.0.1:8000`.
 
 | Méthode | URL | Rôle |
 |---|---|---|
-| POST | `/oauth/token` | Obtenir un access token (5 min) |
+| POST | `/oauth/token` | Obtenir un access token OAuth2 (grant_type=client_credentials, 5 min) |
 | POST | `/api/test/accounts/` | **[Aide de test]** simule un contribuable qui ajoute un compte |
 | POST | `/api/test/payments/` | **[Aide de test]** simule un contribuable qui confirme un paiement |
 | GET | `/api/test/rejection-codes/` | Liste des codes de rejet (Annexe 2) |
@@ -37,6 +37,29 @@ Le serveur écoute par défaut sur `http://127.0.0.1:8000`.
 > ils créent la transaction et vous donnent le `transactionId` à utiliser
 > pour la suite du scénario (comme si la banque venait de recevoir la
 > notification).
+
+### 2.1 Authentification OAuth2 (`client_credentials`)
+
+`POST /oauth/token` implémente le grant type `client_credentials` de la RFC 6749.
+Le client peut s'authentifier de deux manières :
+
+- **client_secret_post** : `client_id` / `client_secret` dans le corps `application/x-www-form-urlencoded` (ou JSON), avec `grant_type=client_credentials`.
+- **client_secret_basic** : en-tête `Authorization: Basic base64(client_id:client_secret)`, avec `grant_type=client_credentials` dans le corps.
+
+Réponse en cas de succès (200) :
+
+```json
+{
+  "access_token": "…",
+  "token_type": "Bearer",
+  "expires_in": 300
+}
+```
+
+Le token doit ensuite être envoyé en en-tête `Authorization: Bearer <access_token>`
+sur les endpoints protégés. En cas d'erreur, la réponse suit le format standard
+OAuth2 `{"error": "...", "error_description": "..."}` (`invalid_request`,
+`invalid_client`, `unsupported_grant_type`).
 
 ## 3. Machine à états
 

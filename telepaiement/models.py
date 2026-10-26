@@ -1,8 +1,50 @@
 import uuid
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
+
+
+# ---------------------------------------------------------------------------
+# Profil utilisateur - chaque utilisateur (User Django) a un rôle parmi 4.
+# ---------------------------------------------------------------------------
+class UserProfile(models.Model):
+    ROLE_ADMIN = "ADMIN"
+    ROLE_COMMERCIAL = "COMMERCIAL"
+    ROLE_OPERATION = "OPERATION"
+    ROLE_COMPTABILITE = "COMPTABILITE"
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, "Administrateur"),
+        (ROLE_COMMERCIAL, "Commercial"),
+        (ROLE_OPERATION, "Opération"),
+        (ROLE_COMPTABILITE, "Comptabilité"),
+    ]
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_OPERATION)
+
+    def __str__(self):
+        return f"{self.user.username} ({self.get_role_display()})"
+
+
+# ---------------------------------------------------------------------------
+# Associe un access token Keycloak (renvoyé par POST /stt/token) à
+# l'utilisateur local qui l'a demandé, pour retrouver son profil à partir de
+# ce même token (GET /api/profile/, Authorization: Bearer <access_token>).
+# ---------------------------------------------------------------------------
+class IssuedSttToken(models.Model):
+    token = models.TextField(unique=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stt_tokens")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def is_valid(self):
+        return self.expires_at is None or timezone.now() < self.expires_at
+
+    def __str__(self):
+        return f"STT token de {self.user.username}"
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +100,7 @@ REJECTION_REASONS = {
     "800": "Pas de réponse",
     "801": "Rejet de la demande",
     "802": "Incident technique",
-    "999": "Dépassement de plafond",
+    "803": "Dépassement de plafond",
 }
 
 
@@ -75,11 +117,15 @@ class AccountTransaction(models.Model):
         (STATUS_REJECTED, "Rejeté"),
     ]
 
-    transaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    tax_payer_iban = models.CharField(max_length=34)
-    tax_payer_legal_name = models.CharField(max_length=150)
-    nif = models.CharField(max_length=20)
-    tax_payer_phone_number = models.CharField(max_length=20)
+    # editable=True (et plus de default) : le client DOIT fournir transactionId.
+    # Si vous voulez un fallback auto-généré quand le client ne le fournit pas,
+    # gardez default=uuid.uuid4 et laissez juste editable=True.
+    transaction_id = models.CharField(max_length=64, primary_key=True, editable=True)
+
+    tax_payer_iban = models.CharField(max_length=34, blank=True, default="")
+    tax_payer_legal_name = models.CharField(max_length=150, blank=True, default="")
+    nif = models.CharField(max_length=20, blank=True, default="")
+    tax_payer_phone_number = models.CharField(max_length=20, blank=True, default="")
     operation_date = models.DateTimeField(default=timezone.now)
 
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_PENDING)
@@ -87,6 +133,8 @@ class AccountTransaction(models.Model):
 
     def __str__(self):
         return f"ACCOUNT {self.transaction_id} [{self.status}]"
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -104,13 +152,13 @@ class PaymentTransaction(models.Model):
         (STATUS_REJECTED, "Rejeté"),
     ]
 
-    transaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    tax_payer_iban = models.CharField(max_length=34)
-    tax_payer_legal_name = models.CharField(max_length=150)
-    nif = models.CharField(max_length=20)
-    ntd = models.CharField(max_length=30)
-    tax_payer_phone_number = models.CharField(max_length=20)
-    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    transaction_id = models.CharField(max_length=64, primary_key=True, editable=True)
+    tax_payer_iban = models.CharField(max_length=34, blank=True, default="")
+    tax_payer_legal_name = models.CharField(max_length=150, blank=True, default="")
+    nif = models.CharField(max_length=20, blank=True, default="")
+    ntd = models.CharField(max_length=30, blank=True, default="")
+    tax_payer_phone_number = models.CharField(max_length=20, blank=True, default="")
+    amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     operation_date = models.DateTimeField(default=timezone.now)
 
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_PENDING)
@@ -119,3 +167,24 @@ class PaymentTransaction(models.Model):
 
     def __str__(self):
         return f"PAYMENT {self.transaction_id} [{self.status}]"
+
+
+# ---------------------------------------------------------------------------
+# IV.5 — Archive des paiements traités (EXECUTED, confirmés auprès du STT)
+# ---------------------------------------------------------------------------
+class ArchivedPayment(models.Model):
+    transaction_id = models.CharField(max_length=64, primary_key=True, editable=True)
+    tax_payer_iban = models.CharField(max_length=34, blank=True, default="")
+    tax_payer_legal_name = models.CharField(max_length=150, blank=True, default="")
+    nif = models.CharField(max_length=20, blank=True, default="")
+    ntd = models.CharField(max_length=30, blank=True, default="")
+    tax_payer_phone_number = models.CharField(max_length=20, blank=True, default="")
+    amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    operation_date = models.DateTimeField(null=True, blank=True)
+    transaction_id_bank = models.CharField(max_length=50, blank=True, default="")
+    status = models.CharField(max_length=15, default=PaymentTransaction.STATUS_EXECUTED)
+    stt_response = models.JSONField(blank=True, default=dict)
+    archived_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"ARCHIVE {self.transaction_id}"
